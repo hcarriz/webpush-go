@@ -1,6 +1,7 @@
 package webpush
 
 import (
+	"crypto/ecdh"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -8,6 +9,7 @@ import (
 	"fmt"
 	"math/big"
 	"net/url"
+	"strings"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -16,24 +18,26 @@ import (
 // GenerateVAPIDKeys will create a private and public VAPID key pair
 func GenerateVAPIDKeys() (privateKey, publicKey string, err error) {
 	// Get the private key from the P256 curve
-	curve := elliptic.P256()
 
-	private, x, y, err := elliptic.GenerateKey(curve, rand.Reader)
+	curve := ecdh.P256()
+
+	private, err := curve.GenerateKey(rand.Reader)
 	if err != nil {
-		return
+		return "", "", err
 	}
 
-	public := elliptic.Marshal(curve, x, y)
+	public := private.PublicKey()
 
 	// Convert to base64
-	publicKey = base64.RawURLEncoding.EncodeToString(public)
-	privateKey = base64.RawURLEncoding.EncodeToString(private)
+	publicKey = base64.RawURLEncoding.EncodeToString(public.Bytes())
+	privateKey = base64.RawURLEncoding.EncodeToString(private.Bytes())
 
 	return
 }
 
 // Generates the ECDSA public and private keys for the JWT encryption
 func generateVAPIDHeaderKeys(privateKey []byte) *ecdsa.PrivateKey {
+
 	// Public key
 	curve := elliptic.P256()
 	px, py := curve.ScalarMult(
@@ -98,11 +102,25 @@ func getVAPIDAuthorizationHeader(
 		return "", err
 	}
 
-	return fmt.Sprintf(
-		"vapid t=%s, k=%s",
-		jwtString,
-		base64.RawURLEncoding.EncodeToString(pubKey),
-	), nil
+	b := strings.Builder{}
+
+	if _, err := b.WriteString("vapid t="); err != nil {
+		return "", err
+	}
+
+	if _, err := b.WriteString(jwtString); err != nil {
+		return "", err
+	}
+
+	if _, err := b.WriteString(", k="); err != nil {
+		return "", err
+	}
+
+	if _, err := b.WriteString(base64.RawURLEncoding.EncodeToString(pubKey)); err != nil {
+		return "", err
+	}
+
+	return b.String(), nil
 }
 
 // Need to decode the vapid private key in multiple base64 formats

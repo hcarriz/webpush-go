@@ -5,7 +5,7 @@ import (
 	"context"
 	"crypto/aes"
 	"crypto/cipher"
-	"crypto/elliptic"
+	"crypto/ecdh"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
@@ -25,7 +25,7 @@ const MaxRecordSize uint32 = 4096
 var ErrMaxPadExceeded = errors.New("payload has exceeded the maximum length")
 
 // saltFunc generates a salt of 16 bytes
-var saltFunc = func() ([]byte, error) {
+func saltFunc() ([]byte, error) {
 	salt := make([]byte, 16)
 	_, err := io.ReadFull(rand.Reader, salt)
 	if err != nil {
@@ -93,30 +93,25 @@ func SendNotificationWithContext(ctx context.Context, message []byte, s *Subscri
 	}
 
 	// Create the ecdh_secret shared key pair
-	curve := elliptic.P256()
+	curve := ecdh.P256()
 
 	// Application server key pairs (single use)
-	localPrivateKey, x, y, err := elliptic.GenerateKey(curve, rand.Reader)
+	pk, err := curve.GenerateKey(rand.Reader)
+	if err != nil {
+		return nil, err
+	}
+	localPublicKey := pk.PublicKey().Bytes()
+
+	// Combine application keys with receiver's EC public key
+	sharedX, err := curve.NewPublicKey(dh)
 	if err != nil {
 		return nil, err
 	}
 
-	localPublicKey := elliptic.Marshal(curve, x, y)
-
-	// Combine application keys with receiver's EC public key
-	sharedX, sharedY := elliptic.Unmarshal(curve, dh)
-	if sharedX == nil {
-		return nil, errors.New("Unmarshal Error: Public key is not a valid point on the curve")
+	sharedECDHSecret, err := pk.ECDH(sharedX)
+	if err != nil {
+		return nil, err
 	}
-
-	// Derive ECDH shared secret
-	sx, sy := curve.ScalarMult(sharedX, sharedY, localPrivateKey)
-	if !curve.IsOnCurve(sx, sy) {
-		return nil, errors.New("Encryption error: ECDH shared secret isn't on curve")
-	}
-	mlen := curve.Params().BitSize / 8
-	sharedECDHSecret := make([]byte, mlen)
-	sx.FillBytes(sharedECDHSecret)
 
 	hash := sha256.New
 
