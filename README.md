@@ -1,13 +1,15 @@
 # webpush-go
 
-[![Go Report Card](https://goreportcard.com/badge/github.com/SherClockHolmes/webpush-go)](https://goreportcard.com/report/github.com/SherClockHolmes/webpush-go)
-[![GoDoc](https://godoc.org/github.com/SherClockHolmes/webpush-go?status.svg)](https://godoc.org/github.com/SherClockHolmes/webpush-go)
+[![Go Report Card](https://goreportcard.com/badge/github.com/hcarriz/webpush-go)](https://goreportcard.com/report/github.com/hcarriz/webpush-go)
+[![GoDoc](https://godoc.org/github.com/hcarriz/webpush-go?status.svg)](https://godoc.org/github.com/hcarriz/webpush-go)
 
 Web Push API Encryption with VAPID support.
 
 ```bash
-go get -u github.com/SherClockHolmes/webpush-go
+go get -u github.com/hcarriz/webpush-go
 ```
+
+> This project is a fork of [github.com/SherClockHolmes/webpush-go](https://github.com/SherClockHolmes/webpush-go/)
 
 ## Example
 
@@ -19,7 +21,7 @@ package main
 import (
 	"encoding/json"
 
-	webpush "github.com/SherClockHolmes/webpush-go"
+	webpush "github.com/hcarriz/webpush-go"
 )
 
 func main() {
