@@ -2,9 +2,9 @@ name: Go
 
 on:
   push:
-    branches: ["master"]
+    branches: ["v2"]
   pull_request:
-    branches: ["master"]
+    branches: ["v2"]
 
 jobs:
   test:
@@ -27,3 +27,5 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           changelog-file: CHANGELOG.md
           changelog-generator-opt: "emojis=true"
+          custom-arguments: "--no-ci"
+          prerelease: true

@@ -11,6 +11,7 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"strconv"
@@ -20,9 +21,18 @@ import (
 	"golang.org/x/crypto/hkdf"
 )
 
-const MaxRecordSize uint32 = 4096
+const (
+	MaxRecordSize   uint32 = 4096
+	DefaultDuration        = time.Second * 30
+	DefaultTimeout         = time.Second * 30
+)
 
-var ErrMaxPadExceeded = errors.New("payload has exceeded the maximum length")
+var (
+	ErrMaxPadExceeded = errors.New("payload has exceeded the maximum length")
+	ErrNilClient      = errors.New("client is nil")
+	ErrEmptyParameter = errors.New("parameter is empty")
+	ErrInvalidUrgency = errors.New("urgency is invalid")
+)
 
 // saltFunc generates a salt of 16 bytes
 func saltFunc() ([]byte, error) {
@@ -40,40 +50,221 @@ type HTTPClient interface {
 	Do(*http.Request) (*http.Response, error)
 }
 
-// Options are config and extra params needed to send a notification
-type Options struct {
-	HTTPClient      HTTPClient // Will replace with *http.Client by default if not included
-	RecordSize      uint32     // Limit the record size
-	Subscriber      string     // Sub in VAPID JWT token
-	Topic           string     // Set the Topic header to collapse a pending messages (Optional)
-	TTL             int        // Set the TTL on the endpoint POST request
-	Urgency         Urgency    // Set the Urgency header to change a message priority (Optional)
-	VAPIDPublicKey  string     // VAPID public key, passed in VAPID Authorization header
-	VAPIDPrivateKey string     // VAPID private key, used to sign VAPID JWT token
-	VapidExpiration time.Time  // optional expiration for VAPID JWT token (defaults to now + 12 hours)
+// Client configuration that's needed to send a notification.
+type Client struct {
+	client     HTTPClient
+	recordSize uint32
+	subscriber string
+	topic      string
+	ttl        int
+	urgency    Urgency
+	duration   time.Duration
+	privateKey string
+	publicKey  string
 }
 
-// Keys are the base64 encoded values from PushSubscription.getKey()
-type Keys struct {
-	Auth   string `json:"auth"`
-	P256dh string `json:"p256dh"`
+// Option configures the client.
+type Option interface {
+	apply(*Client) error
 }
 
-// Subscription represents a PushSubscription object from the Push API
-type Subscription struct {
-	Endpoint string `json:"endpoint"`
-	Keys     Keys   `json:"keys"`
+type option func(*Client) error
+
+func (o option) apply(c *Client) error {
+	return o(c)
+}
+
+type MissingParameter string
+
+func (mp MissingParameter) Error() string {
+
+	r := string(mp)
+
+	if r == "" {
+		return ""
+	}
+
+	return fmt.Sprintf("%s is missing", r)
+
+}
+
+// Clients sets the client to be used for the request.
+//
+// client can not be nil
+func SetClient(client HTTPClient) Option {
+	return option(func(o *Client) error {
+
+		if client == nil {
+			return ErrNilClient
+		}
+
+		o.client = client
+
+		return nil
+	})
+}
+
+// SetRecordSize is used to limit the record size.
+func SetRecordSize(size uint32) Option {
+	return option(func(o *Client) error {
+		o.recordSize = size
+		return nil
+	})
+}
+
+// SetTopic can set the SetTopic header to collapse a pending messages
+func SetTopic(topic string) Option {
+	return option(func(o *Client) error {
+		o.topic = topic
+		return nil
+	})
+}
+
+// Set the subscriber in the JWT token.
+//
+// sub can not be empty.
+func SetSubscriber(sub string) Option {
+	return option(func(o *Client) error {
+		if sub == "" {
+			return errors.Join(MissingParameter("sub from webpush.Subscriber"), ErrEmptyParameter)
+		}
+		return nil
+	})
+}
+
+// Set the Urgency header to change a message priority
+func SetUrgency(urgency Urgency) Option {
+	return option(func(o *Client) error {
+
+		if !ValidUrgency(urgency) {
+			return ErrInvalidUrgency
+		}
+
+		o.urgency = urgency
+
+		return nil
+	})
+}
+
+// Set the TTL on the endpoint POST request.
+//
+// Browsers may have issues when TTL is set to 0.
+// Will not set ttl to a negative number.
+func SetTTL(ttl int) Option {
+	return option(func(o *Client) error {
+		if ttl >= 0 {
+			o.ttl = ttl
+		}
+		return nil
+	})
+}
+
+// Set the expiration for VAPID JWT token
+func SetExpirationDuration(d time.Duration) Option {
+	return option(func(o *Client) error {
+		o.duration = d
+		return nil
+	})
+}
+
+// Set the private key to be used.
+//
+// Key can not be empty.
+func SetPrivateKey(key string) Option {
+	return option(func(o *Client) error {
+		if key == "" {
+			return errors.Join(MissingParameter("key in webpush.SetPrivateKey"), ErrEmptyParameter)
+		}
+		o.privateKey = key
+		return nil
+	})
+}
+
+// Set the public key to be used.
+//
+// Key can not be empty.
+func SetPublicKey(key string) Option {
+	return option(func(o *Client) error {
+		if key == "" {
+			return errors.Join(MissingParameter("key in webpush.SetPublicKey"), ErrEmptyParameter)
+		}
+		o.publicKey = key
+		return nil
+	})
+}
+
+func New(sub, private, public string, opts ...Option) (*Client, error) {
+
+	o := &Client{
+		client:     &http.Client{Timeout: DefaultTimeout},
+		subscriber: sub,
+		privateKey: private,
+		publicKey:  public,
+		recordSize: MaxRecordSize,
+		duration:   DefaultDuration,
+	}
+
+	if err := o.Set(opts...); err != nil {
+		return nil, err
+	}
+
+	return o, nil
+}
+
+func (o *Client) Set(opts ...Option) error {
+	for _, opt := range opts {
+		if opt == nil {
+			continue
+		}
+
+		if err := opt.apply(o); err != nil {
+			return err
+		}
+
+	}
+
+	if o.subscriber == "" {
+		return errors.Join(MissingParameter("subscriber"), ErrEmptyParameter)
+	}
+
+	if o.privateKey == "" {
+		return errors.Join(MissingParameter("private key"), ErrEmptyParameter)
+	}
+
+	if o.publicKey == "" {
+		return errors.Join(MissingParameter("public key"), ErrEmptyParameter)
+	}
+
+	return nil
 }
 
 // SendNotification calls SendNotificationWithContext with default context for backwards-compatibility
-func SendNotification(message []byte, s *Subscription, options *Options) (*http.Response, error) {
-	return SendNotificationWithContext(context.Background(), message, s, options)
+func (o *Client) Send(subscription Subscription, message []byte) (*http.Response, error) {
+	return o.SendWithContext(context.Background(), subscription, message)
 }
 
 // SendNotificationWithContext sends a push notification to a subscription's endpoint
 // Message Encryption for Web Push, and VAPID protocols.
 // FOR MORE INFORMATION SEE RFC8291: https://datatracker.ietf.org/doc/rfc8291
-func SendNotificationWithContext(ctx context.Context, message []byte, s *Subscription, options *Options) (*http.Response, error) {
+func (o *Client) SendWithContext(ctx context.Context, s Subscription, message []byte, overrides ...Option) (*http.Response, error) {
+
+	// Copy the options
+	options := &Client{
+		client:     o.client,
+		recordSize: o.recordSize,
+		subscriber: o.subscriber,
+		topic:      o.topic,
+		ttl:        o.ttl,
+		urgency:    o.urgency,
+		duration:   o.duration,
+		privateKey: o.privateKey,
+		publicKey:  o.publicKey,
+	}
+
+	if err := options.Set(overrides...); err != nil {
+		return nil, err
+	}
+
 	// Authentication secret (auth_secret)
 	authSecret, err := decodeSubscriptionKey(s.Keys.Auth)
 	if err != nil {
@@ -154,10 +345,7 @@ func SendNotificationWithContext(ctx context.Context, message []byte, s *Subscri
 	}
 
 	// Get the record size
-	recordSize := options.RecordSize
-	if recordSize == 0 {
-		recordSize = MaxRecordSize
-	}
+	recordSize := options.recordSize
 
 	recordLength := int(recordSize) - 16
 
@@ -186,40 +374,39 @@ func SendNotificationWithContext(ctx context.Context, message []byte, s *Subscri
 	recordBuf.Write(ciphertext)
 
 	// POST request
-	req, err := http.NewRequest("POST", s.Endpoint, recordBuf)
+	req, err := http.NewRequestWithContext(ctx, "POST", s.Endpoint, recordBuf)
 	if err != nil {
 		return nil, err
 	}
 
-	if ctx != nil {
-		req = req.WithContext(ctx)
-	}
-
 	req.Header.Set("Content-Encoding", "aes128gcm")
-	req.Header.Set("Content-Length", strconv.Itoa(len(ciphertext)))
+	req.Header.Set("Content-Length", strconv.Itoa(int(recordSize)))
 	req.Header.Set("Content-Type", "application/octet-stream")
-	req.Header.Set("TTL", strconv.Itoa(options.TTL))
+	req.Header.Set("TTL", strconv.Itoa(options.ttl))
 
 	// Сheck the optional headers
-	if len(options.Topic) > 0 {
-		req.Header.Set("Topic", options.Topic)
+	if len(options.topic) > 0 {
+		req.Header.Set("Topic", options.topic)
 	}
 
-	if isValidUrgency(options.Urgency) {
-		req.Header.Set("Urgency", string(options.Urgency))
+	if ValidUrgency(options.urgency) {
+		req.Header.Set("Urgency", options.urgency.String())
 	}
 
-	expiration := options.VapidExpiration
-	if expiration.IsZero() {
-		expiration = time.Now().Add(time.Hour * 12)
+	dur := options.duration
+
+	if dur == 0 {
+
 	}
+
+	expiration := time.Now().Add(options.duration)
 
 	// Get VAPID Authorization header
 	vapidAuthHeader, err := getVAPIDAuthorizationHeader(
 		s.Endpoint,
-		options.Subscriber,
-		options.VAPIDPublicKey,
-		options.VAPIDPrivateKey,
+		options.subscriber,
+		options.publicKey,
+		options.privateKey,
 		expiration,
 	)
 	if err != nil {
@@ -228,15 +415,19 @@ func SendNotificationWithContext(ctx context.Context, message []byte, s *Subscri
 
 	req.Header.Set("Authorization", vapidAuthHeader)
 
-	// Send the request
-	var client HTTPClient
-	if options.HTTPClient != nil {
-		client = options.HTTPClient
-	} else {
-		client = &http.Client{}
-	}
+	return options.client.Do(req)
+}
 
-	return client.Do(req)
+// Keys are the base64 encoded values from PushSubscription.getKey()
+type Keys struct {
+	Auth   string `json:"auth"`
+	P256dh string `json:"p256dh"`
+}
+
+// Subscription represents a PushSubscription object from the Push API
+type Subscription struct {
+	Endpoint string `json:"endpoint"`
+	Keys     Keys   `json:"keys"`
 }
 
 // decodeSubscriptionKey decodes a base64 subscription key.

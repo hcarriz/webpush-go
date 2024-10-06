@@ -16,8 +16,12 @@ const (
 	UrgencyHigh Urgency = "high"
 )
 
+func (u Urgency) String() string {
+	return string(u)
+}
+
 // Checking allowable values for the urgency header
-func isValidUrgency(urgency Urgency) bool {
+func ValidUrgency(urgency Urgency) bool {
 	switch urgency {
 	case UrgencyVeryLow, UrgencyLow, UrgencyNormal, UrgencyHigh:
 		return true
