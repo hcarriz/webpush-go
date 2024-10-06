@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -32,6 +33,10 @@ var (
 	ErrNilClient      = errors.New("client is nil")
 	ErrEmptyParameter = errors.New("parameter is empty")
 	ErrInvalidUrgency = errors.New("urgency is invalid")
+
+	ErrNilSubscriptionEndpoint   = errors.New("subscription endpoint is nil")
+	ErrMissingSubscriptionAuth   = errors.New("subscription is missing auth key")
+	ErrMissingSubscriptionP256DH = errors.New("subscription is missing p256dh key")
 )
 
 // saltFunc generates a salt of 16 bytes
@@ -238,15 +243,19 @@ func (o *Client) Set(opts ...Option) error {
 	return nil
 }
 
-// SendNotification calls SendNotificationWithContext with default context for backwards-compatibility
+// Send calls SendWithContext with default context for backwards-compatibility
 func (o *Client) Send(subscription Subscription, message []byte) (*http.Response, error) {
 	return o.SendWithContext(context.Background(), subscription, message)
 }
 
-// SendNotificationWithContext sends a push notification to a subscription's endpoint
+// SendWithContext sends a push notification to a subscription's endpoint
 // Message Encryption for Web Push, and VAPID protocols.
 // FOR MORE INFORMATION SEE RFC8291: https://datatracker.ietf.org/doc/rfc8291
 func (o *Client) SendWithContext(ctx context.Context, s Subscription, message []byte, overrides ...Option) (*http.Response, error) {
+
+	if err := s.Validate(); err != nil {
+		return nil, err
+	}
 
 	// Copy the options
 	options := &Client{
@@ -374,7 +383,7 @@ func (o *Client) SendWithContext(ctx context.Context, s Subscription, message []
 	recordBuf.Write(ciphertext)
 
 	// POST request
-	req, err := http.NewRequestWithContext(ctx, "POST", s.Endpoint, recordBuf)
+	req, err := http.NewRequestWithContext(ctx, "POST", s.Endpoint.String(), recordBuf)
 	if err != nil {
 		return nil, err
 	}
@@ -426,8 +435,26 @@ type Keys struct {
 
 // Subscription represents a PushSubscription object from the Push API
 type Subscription struct {
-	Endpoint string `json:"endpoint"`
-	Keys     Keys   `json:"keys"`
+	Endpoint *url.URL `json:"endpoint"`
+	Keys     Keys     `json:"keys"`
+}
+
+// Validate will check that everything is correct.
+func (s Subscription) Validate() error {
+
+	if s.Endpoint == nil {
+		return ErrNilSubscriptionEndpoint
+	}
+
+	if s.Keys.Auth == "" {
+		return ErrMissingSubscriptionAuth
+	}
+
+	if s.Keys.P256dh == "" {
+		return ErrMissingSubscriptionP256DH
+	}
+
+	return nil
 }
 
 // decodeSubscriptionKey decodes a base64 subscription key.

@@ -64,17 +64,12 @@ func generateVAPIDHeaderKeys(privateKey []byte) *ecdsa.PrivateKey {
 
 // getVAPIDAuthorizationHeader
 func getVAPIDAuthorizationHeader(
-	endpoint,
+	subURL *url.URL,
 	subscriber,
 	vapidPublicKey,
 	vapidPrivateKey string,
 	expiration time.Time,
 ) (string, error) {
-	// Create the JWT token
-	subURL, err := url.Parse(endpoint)
-	if err != nil {
-		return "", err
-	}
 
 	token := jwt.NewWithClaims(jwt.SigningMethodES256, jwt.MapClaims{
 		"aud": fmt.Sprintf("%s://%s", subURL.Scheme, subURL.Host),
@@ -124,7 +119,6 @@ func getVAPIDAuthorizationHeader(
 }
 
 // Need to decode the vapid private key in multiple base64 formats
-// Solution from: https://github.com/hcarriz/webpush-go/issues/29
 func decodeVapidKey(key string) ([]byte, error) {
 	bytes, err := base64.URLEncoding.DecodeString(key)
 	if err == nil {

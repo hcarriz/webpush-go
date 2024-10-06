@@ -2,6 +2,7 @@ package webpush_test
 
 import (
 	"net/http"
+	"net/url"
 	"strings"
 	"testing"
 
@@ -14,9 +15,12 @@ func (*testHTTPClient) Do(*http.Request) (*http.Response, error) {
 	return &http.Response{StatusCode: 201}, nil
 }
 
+var testurl, _ = url.Parse("https://updates.push.services.mozilla.com/wpush/v2/gAAAAA")
+
 func getURLEncodedTestSubscription() webpush.Subscription {
+
 	return webpush.Subscription{
-		Endpoint: "https://updates.push.services.mozilla.com/wpush/v2/gAAAAA",
+		Endpoint: testurl,
 		Keys: webpush.Keys{
 			P256dh: "BNNL5ZaTfK81qhXOx23-wewhigUeFb632jN6LvRWCFH1ubQr77FE_9qV1FuojuRmHP42zmf34rXgW80OvUVDgTk",
 			Auth:   "zqbxT6JKstKSY9JKibZLSQ",
@@ -26,7 +30,7 @@ func getURLEncodedTestSubscription() webpush.Subscription {
 
 func getStandardEncodedTestSubscription() webpush.Subscription {
 	return webpush.Subscription{
-		Endpoint: "https://updates.push.services.mozilla.com/wpush/v2/gAAAAA",
+		Endpoint: testurl,
 		Keys: webpush.Keys{
 			P256dh: "BNNL5ZaTfK81qhXOx23+wewhigUeFb632jN6LvRWCFH1ubQr77FE/9qV1FuojuRmHP42zmf34rXgW80OvUVDgTk=",
 			Auth:   "zqbxT6JKstKSY9JKibZLSQ==",
@@ -111,10 +115,20 @@ func TestOptions_Send(t *testing.T) {
 				t.Fatalf("unable to create new webpush client, got error = %v", err)
 			}
 
-			_, err = o.Send(tt.args.subscription, tt.args.message)
+			resp, err := o.Send(tt.args.subscription, tt.args.message)
 			if (err != nil) != tt.wantErr {
-				t.Errorf("Options.Send() error = %v, wantErr %v", err, tt.wantErr)
+				t.Fatalf("Options.Send() error = %v, wantErr %v", err, tt.wantErr)
 			}
+
+			if !tt.wantErr {
+				if resp == nil {
+					t.Fatalf("response is nil")
+				}
+				if resp.StatusCode != http.StatusCreated {
+					t.Fatalf("received http status code %d instead of %d", resp.StatusCode, http.StatusCreated)
+				}
+			}
+
 		})
 	}
 }

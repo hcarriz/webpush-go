@@ -3,6 +3,7 @@ package webpush
 import (
 	"encoding/base64"
 	"fmt"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -10,9 +11,11 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 )
 
+var testurl, _ = url.Parse("https://updates.push.services.mozilla.com/wpush/v2/gAAAAA")
+
 func getStandardEncodedTestSubscription() Subscription {
 	return Subscription{
-		Endpoint: "https://updates.push.services.mozilla.com/wpush/v2/gAAAAA",
+		Endpoint: testurl,
 		Keys: Keys{
 			P256dh: "BNNL5ZaTfK81qhXOx23+wewhigUeFb632jN6LvRWCFH1ubQr77FE/9qV1FuojuRmHP42zmf34rXgW80OvUVDgTk=",
 			Auth:   "zqbxT6JKstKSY9JKibZLSQ==",
@@ -60,6 +63,10 @@ func TestVAPID(t *testing.T) {
 		privKey := generateVAPIDHeaderKeys(decodedVapidPrivateKey)
 		return privKey.Public(), nil
 	})
+
+	if token == nil {
+		t.Fatalf("token is nil")
+	}
 
 	// Check the claims on the token
 	if claims, ok := token.Claims.(jwt.MapClaims); ok && token.Valid {
