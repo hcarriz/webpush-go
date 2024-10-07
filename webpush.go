@@ -1,39 +1,21 @@
 package webpush
 
 import (
-	"bytes"
 	"context"
-	"crypto/aes"
-	"crypto/cipher"
-	"crypto/ecdh"
-	"crypto/rand"
-	"crypto/sha256"
-	"encoding/base64"
-	"encoding/binary"
 	"errors"
-	"io"
 	"net/http"
-	"strconv"
-	"strings"
 	"time"
 
-	"golang.org/x/crypto/hkdf"
+	"github.com/hcarriz/webpush-go/v2"
 )
 
-const MaxRecordSize uint32 = 4096
+const MaxRecordSize = webpush.MaxRecordSize
 
-var ErrMaxPadExceeded = errors.New("payload has exceeded the maximum length")
-
-// saltFunc generates a salt of 16 bytes
-func saltFunc() ([]byte, error) {
-	salt := make([]byte, 16)
-	_, err := io.ReadFull(rand.Reader, salt)
-	if err != nil {
-		return salt, err
-	}
-
-	return salt, nil
-}
+var (
+	ErrMaxPadExceeded  = webpush.ErrMaxPadExceeded
+	ErrNilSubscription = errors.New("subscription is nil")
+	ErrNilOptions      = errors.New("options is nil")
+)
 
 // HTTPClient is an interface for sending the notification HTTP request / testing
 type HTTPClient interface {
@@ -74,209 +56,51 @@ func SendNotification(message []byte, s *Subscription, options *Options) (*http.
 // Message Encryption for Web Push, and VAPID protocols.
 // FOR MORE INFORMATION SEE RFC8291: https://datatracker.ietf.org/doc/rfc8291
 func SendNotificationWithContext(ctx context.Context, message []byte, s *Subscription, options *Options) (*http.Response, error) {
-	// Authentication secret (auth_secret)
-	authSecret, err := decodeSubscriptionKey(s.Keys.Auth)
-	if err != nil {
-		return nil, err
+
+	if s == nil {
+		return nil, ErrNilSubscription
 	}
 
-	// dh (Diffie Hellman)
-	dh, err := decodeSubscriptionKey(s.Keys.P256dh)
-	if err != nil {
-		return nil, err
+	if options == nil {
+		return nil, ErrNilOptions
 	}
 
-	// Generate 16 byte salt
-	salt, err := saltFunc()
-	if err != nil {
-		return nil, err
+	opts := []webpush.Option{
+		webpush.SetTopic(options.Topic),
+		webpush.SetTTL(options.TTL),
 	}
 
-	// Create the ecdh_secret shared key pair
-	curve := ecdh.P256()
-
-	// Application server key pairs (single use)
-	pk, err := curve.GenerateKey(rand.Reader)
-	if err != nil {
-		return nil, err
-	}
-	localPublicKey := pk.PublicKey().Bytes()
-
-	// Combine application keys with receiver's EC public key
-	sharedX, err := curve.NewPublicKey(dh)
-	if err != nil {
-		return nil, err
+	if options.HTTPClient != nil {
+		opts = append(opts, webpush.SetClient(options.HTTPClient))
 	}
 
-	sharedECDHSecret, err := pk.ECDH(sharedX)
-	if err != nil {
-		return nil, err
-	}
-
-	hash := sha256.New
-
-	// ikm
-	prkInfoBuf := bytes.NewBuffer([]byte("WebPush: info\x00"))
-	prkInfoBuf.Write(dh)
-	prkInfoBuf.Write(localPublicKey)
-
-	prkHKDF := hkdf.New(hash, sharedECDHSecret, authSecret, prkInfoBuf.Bytes())
-	ikm, err := getHKDFKey(prkHKDF, 32)
-	if err != nil {
-		return nil, err
-	}
-
-	// Derive Content Encryption Key
-	contentEncryptionKeyInfo := []byte("Content-Encoding: aes128gcm\x00")
-	contentHKDF := hkdf.New(hash, ikm, salt, contentEncryptionKeyInfo)
-	contentEncryptionKey, err := getHKDFKey(contentHKDF, 16)
-	if err != nil {
-		return nil, err
-	}
-
-	// Derive the Nonce
-	nonceInfo := []byte("Content-Encoding: nonce\x00")
-	nonceHKDF := hkdf.New(hash, ikm, salt, nonceInfo)
-	nonce, err := getHKDFKey(nonceHKDF, 12)
-	if err != nil {
-		return nil, err
-	}
-
-	// Cipher
-	c, err := aes.NewCipher(contentEncryptionKey)
-	if err != nil {
-		return nil, err
-	}
-
-	gcm, err := cipher.NewGCM(c)
-	if err != nil {
-		return nil, err
-	}
-
-	// Get the record size
-	recordSize := options.RecordSize
-	if recordSize == 0 {
-		recordSize = MaxRecordSize
-	}
-
-	recordLength := int(recordSize) - 16
-
-	// Encryption Content-Coding Header
-	recordBuf := bytes.NewBuffer(salt)
-
-	rs := make([]byte, 4)
-	binary.BigEndian.PutUint32(rs, recordSize)
-
-	recordBuf.Write(rs)
-	recordBuf.Write([]byte{byte(len(localPublicKey))})
-	recordBuf.Write(localPublicKey)
-
-	// Data
-	dataBuf := bytes.NewBuffer(message)
-
-	// Pad content to max record size - 16 - header
-	// Padding ending delimeter
-	dataBuf.Write([]byte("\x02"))
-	if err := pad(dataBuf, recordLength-recordBuf.Len()); err != nil {
-		return nil, err
-	}
-
-	// Compose the ciphertext
-	ciphertext := gcm.Seal([]byte{}, nonce, dataBuf.Bytes(), nil)
-	recordBuf.Write(ciphertext)
-
-	// POST request
-	req, err := http.NewRequest("POST", s.Endpoint, recordBuf)
-	if err != nil {
-		return nil, err
-	}
-
-	if ctx != nil {
-		req = req.WithContext(ctx)
-	}
-
-	req.Header.Set("Content-Encoding", "aes128gcm")
-	req.Header.Set("Content-Length", strconv.Itoa(len(ciphertext)))
-	req.Header.Set("Content-Type", "application/octet-stream")
-	req.Header.Set("TTL", strconv.Itoa(options.TTL))
-
-	// Сheck the optional headers
-	if len(options.Topic) > 0 {
-		req.Header.Set("Topic", options.Topic)
+	if options.RecordSize > 0 {
+		opts = append(opts, webpush.SetRecordSize(options.RecordSize))
 	}
 
 	if isValidUrgency(options.Urgency) {
-		req.Header.Set("Urgency", string(options.Urgency))
+		if urgency := webpush.Urgency(options.Urgency); webpush.ValidUrgency(urgency) {
+			opts = append(opts, webpush.SetUrgency(urgency))
+		}
 	}
 
-	expiration := options.VapidExpiration
-	if expiration.IsZero() {
-		expiration = time.Now().Add(time.Hour * 12)
+	if !options.VapidExpiration.IsZero() {
+		opts = append(opts, webpush.SetExpirationDuration(time.Until(options.VapidExpiration)))
 	}
 
-	// Get VAPID Authorization header
-	vapidAuthHeader, err := getVAPIDAuthorizationHeader(
-		s.Endpoint,
-		options.Subscriber,
-		options.VAPIDPublicKey,
-		options.VAPIDPrivateKey,
-		expiration,
-	)
+	client, err := webpush.New(options.Subscriber, options.VAPIDPrivateKey, options.VAPIDPublicKey, opts...)
 	if err != nil {
 		return nil, err
 	}
 
-	req.Header.Set("Authorization", vapidAuthHeader)
-
-	// Send the request
-	var client HTTPClient
-	if options.HTTPClient != nil {
-		client = options.HTTPClient
-	} else {
-		client = &http.Client{}
+	sub := webpush.Subscription{
+		Endpoint: s.Endpoint,
+		Keys: webpush.Keys{
+			Auth:   s.Keys.Auth,
+			P256dh: s.Keys.P256dh,
+		},
 	}
 
-	return client.Do(req)
-}
+	return client.SendWithContext(ctx, sub, message)
 
-// decodeSubscriptionKey decodes a base64 subscription key.
-// if necessary, add "=" padding to the key for URL decode
-func decodeSubscriptionKey(key string) ([]byte, error) {
-	// "=" padding
-	buf := bytes.NewBufferString(key)
-	if rem := len(key) % 4; rem != 0 {
-		buf.WriteString(strings.Repeat("=", 4-rem))
-	}
-
-	bytes, err := base64.StdEncoding.DecodeString(buf.String())
-	if err == nil {
-		return bytes, nil
-	}
-
-	return base64.URLEncoding.DecodeString(buf.String())
-}
-
-// Returns a key of length "length" given an hkdf function
-func getHKDFKey(hkdf io.Reader, length int) ([]byte, error) {
-	key := make([]byte, length)
-	n, err := io.ReadFull(hkdf, key)
-	if n != len(key) || err != nil {
-		return key, err
-	}
-
-	return key, nil
-}
-
-func pad(payload *bytes.Buffer, maxPadLen int) error {
-	payloadLen := payload.Len()
-	if payloadLen > maxPadLen {
-		return ErrMaxPadExceeded
-	}
-
-	padLen := maxPadLen - payloadLen
-
-	padding := make([]byte, padLen)
-	payload.Write(padding)
-
-	return nil
 }

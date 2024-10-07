@@ -1,6 +1,7 @@
 package webpush
 
 import (
+	"errors"
 	"net/http"
 	"strings"
 	"testing"
@@ -9,7 +10,7 @@ import (
 type testHTTPClient struct{}
 
 func (*testHTTPClient) Do(*http.Request) (*http.Response, error) {
-	return &http.Response{StatusCode: 201}, nil
+	return &http.Response{StatusCode: http.StatusCreated}, nil
 }
 
 func getURLEncodedTestSubscription() *Subscription {
@@ -47,12 +48,12 @@ func TestSendNotificationToURLEncodedSubscription(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if resp.StatusCode != 201 {
-		t.Fatalf(
-			"Incorreect status code, expected=%d, got=%d",
-			resp.StatusCode,
-			201,
-		)
+	if resp == nil {
+		t.Fatal("Response is nil")
+	}
+
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("Incorreect status code, expected=%d, got=%d", resp.StatusCode, http.StatusCreated)
 	}
 }
 
@@ -64,17 +65,18 @@ func TestSendNotificationToStandardEncodedSubscription(t *testing.T) {
 		TTL:             0,
 		Urgency:         "low",
 		VAPIDPrivateKey: "testKey",
+		VAPIDPublicKey:  "testKey",
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	if resp.StatusCode != 201 {
-		t.Fatalf(
-			"Incorreect status code, expected=%d, got=%d",
-			resp.StatusCode,
-			201,
-		)
+	if resp == nil {
+		t.Fatal("Response is nil")
+	}
+
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("Incorreect status code, expected=%d, got=%d", resp.StatusCode, http.StatusCreated)
 	}
 }
 
@@ -86,8 +88,9 @@ func TestSendTooLargeNotification(t *testing.T) {
 		TTL:             0,
 		Urgency:         "low",
 		VAPIDPrivateKey: "testKey",
+		VAPIDPublicKey:  "testPublicKey",
 	})
-	if err == nil {
-		t.Fatalf("Error is nil, expected=%s", ErrMaxPadExceeded)
+	if !errors.Is(err, ErrMaxPadExceeded) {
+		t.Fatalf("Error is %s, expected=%s", err, ErrMaxPadExceeded)
 	}
 }
