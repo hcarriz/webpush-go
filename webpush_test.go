@@ -15,6 +15,7 @@ func (*testHTTPClient) Do(*http.Request) (*http.Response, error) {
 }
 
 func getURLEncodedTestSubscription() webpush.Subscription {
+
 	return webpush.Subscription{
 		Endpoint: "https://updates.push.services.mozilla.com/wpush/v2/gAAAAA",
 		Keys: webpush.Keys{
@@ -64,6 +65,7 @@ func TestOptions_Send(t *testing.T) {
 				private:      "private",
 				subscription: getStandardEncodedTestSubscription(),
 				message:      []byte("test"),
+				opts:         []webpush.Option{webpush.SetClient(&testHTTPClient{})},
 			},
 			wantErr: false,
 		},
@@ -111,9 +113,60 @@ func TestOptions_Send(t *testing.T) {
 				t.Fatalf("unable to create new webpush client, got error = %v", err)
 			}
 
-			_, err = o.Send(tt.args.subscription, tt.args.message)
+			resp, err := o.Send(tt.args.subscription, tt.args.message)
 			if (err != nil) != tt.wantErr {
-				t.Errorf("Options.Send() error = %v, wantErr %v", err, tt.wantErr)
+				t.Fatalf("Options.Send() error = %v, wantErr %v", err, tt.wantErr)
+			}
+
+			if !tt.wantErr {
+				if resp == nil {
+					t.Fatalf("response is nil")
+				}
+				if resp.StatusCode != http.StatusCreated {
+					t.Fatalf("received http status code %d instead of %d", resp.StatusCode, http.StatusCreated)
+				}
+			}
+
+		})
+	}
+}
+
+func TestClient_SkipForEndpoint(t *testing.T) {
+
+	type args struct {
+		endpoint string
+		exclude  []string
+	}
+	tests := []struct {
+		name string
+		args args
+		want bool
+	}{
+		{
+			name: "don't exclude microsoft",
+			args: args{
+				endpoint: "https://wns2-by3p.notify.windows.com/w/?token=BQYAA",
+			},
+			want: false,
+		},
+		{
+			name: "exclude microsoft",
+			args: args{
+				endpoint: "https://wns2-by3p.notify.windows.com/w/?token=BQYAA",
+				exclude:  []string{"windows.com"},
+			},
+			want: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c, err := webpush.New("test@test.com", "test", "test", webpush.SetTTL(0, tt.args.exclude...))
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			if got := c.SkipForEndpoint(tt.args.endpoint); got != tt.want {
+				t.Errorf("Client.SkipForEndpoint() = %v, want %v", got, tt.want)
 			}
 		})
 	}

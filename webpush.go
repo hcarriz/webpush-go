@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -25,6 +26,7 @@ const (
 	MaxRecordSize   uint32 = 4096
 	DefaultDuration        = time.Second * 30
 	DefaultTimeout         = time.Second * 30
+	DefaultTTL             = 30
 )
 
 var (
@@ -32,6 +34,10 @@ var (
 	ErrNilClient      = errors.New("client is nil")
 	ErrEmptyParameter = errors.New("parameter is empty")
 	ErrInvalidUrgency = errors.New("urgency is invalid")
+
+	ErrNilSubscriptionEndpoint   = errors.New("subscription endpoint is nil")
+	ErrMissingSubscriptionAuth   = errors.New("subscription is missing auth key")
+	ErrMissingSubscriptionP256DH = errors.New("subscription is missing p256dh key")
 )
 
 // saltFunc generates a salt of 16 bytes
@@ -52,15 +58,42 @@ type HTTPClient interface {
 
 // Client configuration that's needed to send a notification.
 type Client struct {
-	client     HTTPClient
-	recordSize uint32
-	subscriber string
-	topic      string
-	ttl        int
-	urgency    Urgency
-	duration   time.Duration
-	privateKey string
-	publicKey  string
+	client         HTTPClient
+	recordSize     uint32
+	subscriber     string
+	topic          string
+	ttl            int
+	urgency        Urgency
+	duration       time.Duration
+	privateKey     string
+	publicKey      string
+	excludeZeroTTL []string
+}
+
+// Check if the client will skip the endpoint.
+//
+// Example: if you use SetTTL(0, "windows.com"), it will return true for "https://wns2-by3p.notify.windows.com/....".
+func (c Client) SkipForEndpoint(endpoint string) bool {
+
+	ep, err := url.Parse(endpoint)
+	if err != nil {
+		return false
+	}
+
+	if len(c.excludeZeroTTL) == 0 {
+		return false
+	}
+
+	for _, end := range c.excludeZeroTTL {
+
+		if strings.HasSuffix(ep.Host, end) {
+			return true
+		}
+
+	}
+
+	return false
+
 }
 
 // Option configures the client.
@@ -148,13 +181,15 @@ func SetUrgency(urgency Urgency) Option {
 
 // Set the TTL on the endpoint POST request.
 //
-// Browsers may have issues when TTL is set to 0.
-// Will not set ttl to a negative number.
-func SetTTL(ttl int) Option {
+// Certain browsers may have issues when TTL is set to 0. TTL must be >= 0 to be set.
+//
+// You can set the domains to exclude the zero ttl header with the exclude variable.
+func SetTTL(ttl int, exclude ...string) Option {
 	return option(func(o *Client) error {
 		if ttl >= 0 {
 			o.ttl = ttl
 		}
+		o.excludeZeroTTL = exclude
 		return nil
 	})
 }
@@ -202,6 +237,7 @@ func New(sub, private, public string, opts ...Option) (*Client, error) {
 		publicKey:  public,
 		recordSize: MaxRecordSize,
 		duration:   DefaultDuration,
+		ttl:        DefaultTTL,
 	}
 
 	if err := o.Set(opts...); err != nil {
@@ -238,27 +274,32 @@ func (o *Client) Set(opts ...Option) error {
 	return nil
 }
 
-// SendNotification calls SendNotificationWithContext with default context for backwards-compatibility
+// Send calls SendWithContext with default context for backwards-compatibility
 func (o *Client) Send(subscription Subscription, message []byte) (*http.Response, error) {
 	return o.SendWithContext(context.Background(), subscription, message)
 }
 
-// SendNotificationWithContext sends a push notification to a subscription's endpoint
+// SendWithContext sends a push notification to a subscription's endpoint
 // Message Encryption for Web Push, and VAPID protocols.
 // FOR MORE INFORMATION SEE RFC8291: https://datatracker.ietf.org/doc/rfc8291
 func (o *Client) SendWithContext(ctx context.Context, s Subscription, message []byte, overrides ...Option) (*http.Response, error) {
 
+	if err := s.Validate(); err != nil {
+		return nil, err
+	}
+
 	// Copy the options
 	options := &Client{
-		client:     o.client,
-		recordSize: o.recordSize,
-		subscriber: o.subscriber,
-		topic:      o.topic,
-		ttl:        o.ttl,
-		urgency:    o.urgency,
-		duration:   o.duration,
-		privateKey: o.privateKey,
-		publicKey:  o.publicKey,
+		client:         o.client,
+		recordSize:     o.recordSize,
+		subscriber:     o.subscriber,
+		topic:          o.topic,
+		ttl:            o.ttl,
+		urgency:        o.urgency,
+		duration:       o.duration,
+		privateKey:     o.privateKey,
+		publicKey:      o.publicKey,
+		excludeZeroTTL: o.excludeZeroTTL,
 	}
 
 	if err := options.Set(overrides...); err != nil {
@@ -382,7 +423,10 @@ func (o *Client) SendWithContext(ctx context.Context, s Subscription, message []
 	req.Header.Set("Content-Encoding", "aes128gcm")
 	req.Header.Set("Content-Length", strconv.Itoa(int(recordSize)))
 	req.Header.Set("Content-Type", "application/octet-stream")
-	req.Header.Set("TTL", strconv.Itoa(options.ttl))
+
+	if !options.SkipForEndpoint(s.Endpoint) {
+		req.Header.Set("TTL", strconv.Itoa(options.ttl))
+	}
 
 	// Сheck the optional headers
 	if len(options.topic) > 0 {
@@ -428,6 +472,24 @@ type Keys struct {
 type Subscription struct {
 	Endpoint string `json:"endpoint"`
 	Keys     Keys   `json:"keys"`
+}
+
+// Validate will check that everything is correct.
+func (s Subscription) Validate() error {
+
+	if s.Endpoint == "" {
+		return ErrNilSubscriptionEndpoint
+	}
+
+	if s.Keys.Auth == "" {
+		return ErrMissingSubscriptionAuth
+	}
+
+	if s.Keys.P256dh == "" {
+		return ErrMissingSubscriptionP256DH
+	}
+
+	return nil
 }
 
 // decodeSubscriptionKey decodes a base64 subscription key.

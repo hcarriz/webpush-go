@@ -70,7 +70,7 @@ func getVAPIDAuthorizationHeader(
 	vapidPrivateKey string,
 	expiration time.Time,
 ) (string, error) {
-	// Create the JWT token
+
 	subURL, err := url.Parse(endpoint)
 	if err != nil {
 		return "", err
@@ -124,7 +124,6 @@ func getVAPIDAuthorizationHeader(
 }
 
 // Need to decode the vapid private key in multiple base64 formats
-// Solution from: https://github.com/hcarriz/webpush-go/issues/29
 func decodeVapidKey(key string) ([]byte, error) {
 	bytes, err := base64.URLEncoding.DecodeString(key)
 	if err == nil {

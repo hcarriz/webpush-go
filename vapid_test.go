@@ -61,6 +61,10 @@ func TestVAPID(t *testing.T) {
 		return privKey.Public(), nil
 	})
 
+	if token == nil {
+		t.Fatalf("token is nil")
+	}
+
 	// Check the claims on the token
 	if claims, ok := token.Claims.(jwt.MapClaims); ok && token.Valid {
 		expectedSub := fmt.Sprintf("mailto:%s", sub)
