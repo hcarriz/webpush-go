@@ -2,7 +2,6 @@ package webpush_test
 
 import (
 	"net/http"
-	"net/url"
 	"strings"
 	"testing"
 
@@ -15,12 +14,10 @@ func (*testHTTPClient) Do(*http.Request) (*http.Response, error) {
 	return &http.Response{StatusCode: 201}, nil
 }
 
-var testurl, _ = url.Parse("https://updates.push.services.mozilla.com/wpush/v2/gAAAAA")
-
 func getURLEncodedTestSubscription() webpush.Subscription {
 
 	return webpush.Subscription{
-		Endpoint: testurl,
+		Endpoint: "https://updates.push.services.mozilla.com/wpush/v2/gAAAAA",
 		Keys: webpush.Keys{
 			P256dh: "BNNL5ZaTfK81qhXOx23-wewhigUeFb632jN6LvRWCFH1ubQr77FE_9qV1FuojuRmHP42zmf34rXgW80OvUVDgTk",
 			Auth:   "zqbxT6JKstKSY9JKibZLSQ",
@@ -30,7 +27,7 @@ func getURLEncodedTestSubscription() webpush.Subscription {
 
 func getStandardEncodedTestSubscription() webpush.Subscription {
 	return webpush.Subscription{
-		Endpoint: testurl,
+		Endpoint: "https://updates.push.services.mozilla.com/wpush/v2/gAAAAA",
 		Keys: webpush.Keys{
 			P256dh: "BNNL5ZaTfK81qhXOx23+wewhigUeFb632jN6LvRWCFH1ubQr77FE/9qV1FuojuRmHP42zmf34rXgW80OvUVDgTk=",
 			Auth:   "zqbxT6JKstKSY9JKibZLSQ==",
@@ -68,6 +65,7 @@ func TestOptions_Send(t *testing.T) {
 				private:      "private",
 				subscription: getStandardEncodedTestSubscription(),
 				message:      []byte("test"),
+				opts:         []webpush.Option{webpush.SetClient(&testHTTPClient{})},
 			},
 			wantErr: false,
 		},
@@ -129,6 +127,47 @@ func TestOptions_Send(t *testing.T) {
 				}
 			}
 
+		})
+	}
+}
+
+func TestClient_SkipForEndpoint(t *testing.T) {
+
+	type args struct {
+		endpoint string
+		exclude  []string
+	}
+	tests := []struct {
+		name string
+		args args
+		want bool
+	}{
+		{
+			name: "don't exclude microsoft",
+			args: args{
+				endpoint: "https://wns2-by3p.notify.windows.com/w/?token=BQYAA",
+			},
+			want: false,
+		},
+		{
+			name: "exclude microsoft",
+			args: args{
+				endpoint: "https://wns2-by3p.notify.windows.com/w/?token=BQYAA",
+				exclude:  []string{"windows.com"},
+			},
+			want: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c, err := webpush.New("test@test.com", "test", "test", webpush.SetTTL(0, tt.args.exclude...))
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			if got := c.SkipForEndpoint(tt.args.endpoint); got != tt.want {
+				t.Errorf("Client.SkipForEndpoint() = %v, want %v", got, tt.want)
+			}
 		})
 	}
 }

@@ -3,7 +3,6 @@ package webpush
 import (
 	"encoding/base64"
 	"fmt"
-	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -11,11 +10,9 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 )
 
-var testurl, _ = url.Parse("https://updates.push.services.mozilla.com/wpush/v2/gAAAAA")
-
 func getStandardEncodedTestSubscription() Subscription {
 	return Subscription{
-		Endpoint: testurl,
+		Endpoint: "https://updates.push.services.mozilla.com/wpush/v2/gAAAAA",
 		Keys: Keys{
 			P256dh: "BNNL5ZaTfK81qhXOx23+wewhigUeFb632jN6LvRWCFH1ubQr77FE/9qV1FuojuRmHP42zmf34rXgW80OvUVDgTk=",
 			Auth:   "zqbxT6JKstKSY9JKibZLSQ==",
