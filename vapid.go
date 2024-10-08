@@ -76,6 +76,11 @@ func getVAPIDAuthorizationHeader(
 		return "", err
 	}
 
+	subject, err = formatVAPIDJWTSubject(subject)
+	if err != nil {
+		return "", err
+	}
+
 	token := jwt.NewWithClaims(jwt.SigningMethodES256, jwt.MapClaims{
 		"aud": fmt.Sprintf("%s://%s", subURL.Scheme, subURL.Host),
 		"exp": expiration.Unix(),

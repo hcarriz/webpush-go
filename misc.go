@@ -8,6 +8,8 @@ import (
 
 func formatVAPIDJWTSubject(input string) (string, error) {
 
+	input = strings.TrimPrefix(input, "mailto:")
+
 	if _, err := mail.ParseAddress(input); err == nil {
 
 		b := strings.Builder{}

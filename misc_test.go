@@ -45,6 +45,12 @@ func Test_formatSubscriber(t *testing.T) {
 			want:    "mailto:john@doe.com",
 			wantErr: false,
 		},
+		{
+			name:    "email - 2",
+			arg:     "mailto:john@doe.com",
+			want:    "mailto:john@doe.com",
+			wantErr: false,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
