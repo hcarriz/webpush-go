@@ -79,7 +79,7 @@ func getVAPIDAuthorizationHeader(
 	token := jwt.NewWithClaims(jwt.SigningMethodES256, jwt.MapClaims{
 		"aud": fmt.Sprintf("%s://%s", subURL.Scheme, subURL.Host),
 		"exp": expiration.Unix(),
-		"sub": fmt.Sprintf("mailto:%s", subscriber),
+		"sub": subscriber,
 	})
 
 	// Decode the VAPID private key

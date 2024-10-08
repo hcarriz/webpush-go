@@ -38,6 +38,7 @@ var (
 	ErrNilSubscriptionEndpoint   = errors.New("subscription endpoint is nil")
 	ErrMissingSubscriptionAuth   = errors.New("subscription is missing auth key")
 	ErrMissingSubscriptionP256DH = errors.New("subscription is missing p256dh key")
+	ErrInvalidSubscriber         = errors.New("subscriber is neither a valid email or a https link")
 )
 
 // saltFunc generates a salt of 16 bytes
@@ -241,6 +242,13 @@ func SetPublicKey(key string) Option {
 }
 
 func New(sub, private, public string, opts ...Option) (*Client, error) {
+
+	var err error
+
+	sub, err = formatSubscriber(sub)
+	if err != nil {
+		return nil, err
+	}
 
 	o := &Client{
 		client:             &http.Client{Timeout: DefaultTimeout},
@@ -448,12 +456,6 @@ func (o *Client) SendWithContext(ctx context.Context, s Subscription, message []
 
 	if ValidUrgency(options.urgency) {
 		req.Header.Set("Urgency", options.urgency.String())
-	}
-
-	dur := options.expirationDuration
-
-	if dur == 0 {
-
 	}
 
 	expiration := time.Now().Add(options.expirationDuration)
