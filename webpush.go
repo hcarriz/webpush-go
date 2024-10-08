@@ -26,7 +26,7 @@ const (
 	MaxRecordSize   uint32 = 4096
 	DefaultDuration        = time.Second * 30
 	DefaultTimeout         = time.Second * 30
-	DefaultTTL             = 30
+	DefaultTTL             = time.Second * 30
 )
 
 var (
@@ -38,6 +38,7 @@ var (
 	ErrNilSubscriptionEndpoint   = errors.New("subscription endpoint is nil")
 	ErrMissingSubscriptionAuth   = errors.New("subscription is missing auth key")
 	ErrMissingSubscriptionP256DH = errors.New("subscription is missing p256dh key")
+	ErrInvalidSubscriber         = errors.New("subscriber is neither a valid email or a https link")
 )
 
 // saltFunc generates a salt of 16 bytes
@@ -58,16 +59,16 @@ type HTTPClient interface {
 
 // Client configuration that's needed to send a notification.
 type Client struct {
-	client         HTTPClient
-	recordSize     uint32
-	subscriber     string
-	topic          string
-	ttl            int
-	urgency        Urgency
-	duration       time.Duration
-	privateKey     string
-	publicKey      string
-	excludeZeroTTL []string
+	client             HTTPClient
+	recordSize         uint32
+	subscriber         string
+	topic              string
+	ttl                time.Duration
+	urgency            Urgency
+	expirationDuration time.Duration
+	privateKey         string
+	publicKey          string
+	excludeZeroTTL     []string
 }
 
 // Check if the client will skip the endpoint.
@@ -75,12 +76,12 @@ type Client struct {
 // Example: if you use SetTTL(0, "windows.com"), it will return true for "https://wns2-by3p.notify.windows.com/....".
 func (c Client) SkipForEndpoint(endpoint string) bool {
 
-	ep, err := url.Parse(endpoint)
-	if err != nil {
+	if c.ttl > 0 || len(c.excludeZeroTTL) == 0 {
 		return false
 	}
 
-	if len(c.excludeZeroTTL) == 0 {
+	ep, err := url.Parse(endpoint)
+	if err != nil {
 		return false
 	}
 
@@ -179,25 +180,44 @@ func SetUrgency(urgency Urgency) Option {
 	})
 }
 
-// Set the TTL on the endpoint POST request.
+// Set the TTL in seconds on the endpoint POST request.
 //
 // Certain browsers may have issues when TTL is set to 0. TTL must be >= 0 to be set.
 //
-// You can set the domains to exclude the zero ttl header with the exclude variable.
+// You can set the domains to exclude the zero ttl header with the exclude variable. This is not recommended.
 func SetTTL(ttl int, exclude ...string) Option {
 	return option(func(o *Client) error {
 		if ttl >= 0 {
-			o.ttl = ttl
+			o.ttl = time.Duration(ttl) * time.Second
 		}
-		o.excludeZeroTTL = exclude
+		if ttl == 0 {
+			o.excludeZeroTTL = exclude
+		}
+		return nil
+	})
+}
+
+// Set the TTL Duration on the endpoint POST request.
+//
+// Certain browsers may have issues when the TTL is set to 0.
+func SetTTLDuration(ttl time.Duration) Option {
+	return option(func(c *Client) error {
+		c.ttl = ttl
 		return nil
 	})
 }
 
 // Set the expiration for VAPID JWT token
+//
+// Duration is capped to 24 hours. See https://www.rfc-editor.org/rfc/rfc8292#section-2
 func SetExpirationDuration(d time.Duration) Option {
 	return option(func(o *Client) error {
-		o.duration = d
+
+		if d >= 24*time.Hour {
+			d = 24 * time.Hour
+		}
+
+		o.expirationDuration = d
 		return nil
 	})
 }
@@ -230,14 +250,21 @@ func SetPublicKey(key string) Option {
 
 func New(sub, private, public string, opts ...Option) (*Client, error) {
 
+	var err error
+
+	sub, err = formatVAPIDJWTSubject(sub)
+	if err != nil {
+		return nil, err
+	}
+
 	o := &Client{
-		client:     &http.Client{Timeout: DefaultTimeout},
-		subscriber: sub,
-		privateKey: private,
-		publicKey:  public,
-		recordSize: MaxRecordSize,
-		duration:   DefaultDuration,
-		ttl:        DefaultTTL,
+		client:             &http.Client{Timeout: DefaultTimeout},
+		subscriber:         sub,
+		privateKey:         private,
+		publicKey:          public,
+		recordSize:         MaxRecordSize,
+		expirationDuration: DefaultDuration,
+		ttl:                DefaultTTL,
 	}
 
 	if err := o.Set(opts...); err != nil {
@@ -290,16 +317,16 @@ func (o *Client) SendWithContext(ctx context.Context, s Subscription, message []
 
 	// Copy the options
 	options := &Client{
-		client:         o.client,
-		recordSize:     o.recordSize,
-		subscriber:     o.subscriber,
-		topic:          o.topic,
-		ttl:            o.ttl,
-		urgency:        o.urgency,
-		duration:       o.duration,
-		privateKey:     o.privateKey,
-		publicKey:      o.publicKey,
-		excludeZeroTTL: o.excludeZeroTTL,
+		client:             o.client,
+		recordSize:         o.recordSize,
+		subscriber:         o.subscriber,
+		topic:              o.topic,
+		ttl:                o.ttl,
+		urgency:            o.urgency,
+		expirationDuration: o.expirationDuration,
+		privateKey:         o.privateKey,
+		publicKey:          o.publicKey,
+		excludeZeroTTL:     o.excludeZeroTTL,
 	}
 
 	if err := options.Set(overrides...); err != nil {
@@ -424,8 +451,9 @@ func (o *Client) SendWithContext(ctx context.Context, s Subscription, message []
 	req.Header.Set("Content-Length", strconv.Itoa(int(recordSize)))
 	req.Header.Set("Content-Type", "application/octet-stream")
 
+	// Not recommended
 	if !options.SkipForEndpoint(s.Endpoint) {
-		req.Header.Set("TTL", strconv.Itoa(options.ttl))
+		req.Header.Set("TTL", fmt.Sprintf("%.0f", options.ttl.Seconds()))
 	}
 
 	// Сheck the optional headers
@@ -437,13 +465,7 @@ func (o *Client) SendWithContext(ctx context.Context, s Subscription, message []
 		req.Header.Set("Urgency", options.urgency.String())
 	}
 
-	dur := options.duration
-
-	if dur == 0 {
-
-	}
-
-	expiration := time.Now().Add(options.duration)
+	expiration := time.Now().Add(options.expirationDuration)
 
 	// Get VAPID Authorization header
 	vapidAuthHeader, err := getVAPIDAuthorizationHeader(
