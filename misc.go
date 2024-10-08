@@ -6,7 +6,7 @@ import (
 	"strings"
 )
 
-func formatSubscriber(input string) (string, error) {
+func formatVAPIDJWTSubject(input string) (string, error) {
 
 	if _, err := mail.ParseAddress(input); err == nil {
 

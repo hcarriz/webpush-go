@@ -208,8 +208,15 @@ func SetTTLDuration(ttl time.Duration) Option {
 }
 
 // Set the expiration for VAPID JWT token
+//
+// Duration is capped to 24 hours. See https://www.rfc-editor.org/rfc/rfc8292#section-2
 func SetExpirationDuration(d time.Duration) Option {
 	return option(func(o *Client) error {
+
+		if d >= 24*time.Hour {
+			d = 24 * time.Hour
+		}
+
 		o.expirationDuration = d
 		return nil
 	})
@@ -245,7 +252,7 @@ func New(sub, private, public string, opts ...Option) (*Client, error) {
 
 	var err error
 
-	sub, err = formatSubscriber(sub)
+	sub, err = formatVAPIDJWTSubject(sub)
 	if err != nil {
 		return nil, err
 	}
